@@ -17,7 +17,6 @@ open Microsoft.FSharp.Compiler.PrettyNaming
 // a :> b without coercion based on finalized (no type variable) types
 //------------------------------------------------------------------------- 
 
-
 // QUERY: This relation is approximate and not part of the language specification. 
 //
 //  Some appropriate uses: 
@@ -128,47 +127,57 @@ let ChooseTyparSolutionAndRange (g: TcGlobals) amap (tp:Typar) =
     let max,m = 
          let initial = 
              match tp.Kind with 
+             // @patricks: this is where we initialise "this is an obj" as our fallback 
              | TyparKind.Type -> g.obj_ty 
              | TyparKind.Measure -> TType_measure Measure.One
          // Loop through the constraints computing the lub
-         ((initial,m), tp.Constraints) ||> List.fold (fun (maxSoFar,_) tpc -> 
-             let join m x = 
-                 if TypeFeasiblySubsumesType 0 g amap m x CanCoerce maxSoFar then maxSoFar
-                 elif TypeFeasiblySubsumesType 0 g amap m maxSoFar CanCoerce x then x
-                 else errorR(Error(FSComp.SR.typrelCannotResolveImplicitGenericInstantiation((DebugPrint.showType x), (DebugPrint.showType maxSoFar)),m)); maxSoFar
+         let max,m,typeWasRefined =
+            ((initial,m,false), tp.Constraints)
+            ||> List.fold (fun (maxSoFar,_,typeWasRefined) tpc -> 
+                let join m x isRefined = 
+                    if TypeFeasiblySubsumesType 0 g amap m x CanCoerce maxSoFar then maxSoFar,isRefined
+                    elif TypeFeasiblySubsumesType 0 g amap m maxSoFar CanCoerce x then x,true
+                    else errorR(Error(FSComp.SR.typrelCannotResolveImplicitGenericInstantiation((DebugPrint.showType x), (DebugPrint.showType maxSoFar)),m)); (maxSoFar,isRefined)
              // Don't continue if an error occurred and we set the value eagerly 
-             if tp.IsSolved then maxSoFar,m else
-             match tpc with 
-             | TyparConstraint.CoercesTo(x,m) -> 
-                 join m x,m
-             | TyparConstraint.MayResolveMember(TTrait(_,_,_,_,_,_),m) ->
-                 maxSoFar,m
-             | TyparConstraint.SimpleChoice(_,m) -> 
-                 errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInPrintf(),m))
-                 maxSoFar,m
-             | TyparConstraint.SupportsNull m -> 
-                 maxSoFar,m
-             | TyparConstraint.SupportsComparison m -> 
-                 join m g.mk_IComparable_ty,m
-             | TyparConstraint.SupportsEquality m -> 
-                 maxSoFar,m
-             | TyparConstraint.IsEnum(_,m) -> 
-                 errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInEnum(),m))
-                 maxSoFar,m
-             | TyparConstraint.IsDelegate(_,_,m) -> 
-                 errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInDelegate(),m))
-                 maxSoFar,m
-             | TyparConstraint.IsNonNullableStruct m -> 
-                 join m g.int_ty,m
-             | TyparConstraint.IsUnmanaged m ->
-                 errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInUnmanaged(),m))
-                 maxSoFar,m
-             | TyparConstraint.RequiresDefaultConstructor m -> 
-                 maxSoFar,m
-             | TyparConstraint.IsReferenceType m -> 
-                 maxSoFar,m
-             | TyparConstraint.DefaultsTo(_priority,_ty,m) -> 
-                 maxSoFar,m)
+                if tp.IsSolved then maxSoFar,m,typeWasRefined else
+                match tpc with 
+                | TyparConstraint.CoercesTo(x,m) -> 
+                    join m x typeWasRefined,m
+                | TyparConstraint.MayResolveMember(TTrait(_,_,_,_,_,_),m) ->
+                    (maxSoFar,false),m
+                | TyparConstraint.SimpleChoice(_,m) -> 
+                    errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInPrintf(),m))
+                    (maxSoFar,false),m
+                | TyparConstraint.SupportsNull m -> 
+                    (maxSoFar,false),m
+                | TyparConstraint.SupportsComparison m -> 
+                    join m g.mk_IComparable_ty typeWasRefined,m
+                | TyparConstraint.SupportsEquality m -> 
+                    (maxSoFar,false),m
+                | TyparConstraint.IsEnum(_,m) -> 
+                    errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInEnum(),m))
+                    (maxSoFar,false),m
+                | TyparConstraint.IsDelegate(_,_,m) -> 
+                    errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInDelegate(),m))
+                    (maxSoFar,false),m
+                | TyparConstraint.IsNonNullableStruct m -> 
+                    join m g.int_ty typeWasRefined,m
+                | TyparConstraint.IsUnmanaged m ->
+                    errorR(Error(FSComp.SR.typrelCannotResolveAmbiguityInUnmanaged(),m))
+                    (maxSoFar,false),m
+                | TyparConstraint.RequiresDefaultConstructor m -> 
+                    (maxSoFar,false),m
+                | TyparConstraint.IsReferenceType m -> 
+                    (maxSoFar,false),m
+                | TyparConstraint.DefaultsTo(_priority,_ty,m) -> 
+                    (maxSoFar,false),m
+                |> fun ((max,didRefineThisStep),m) -> max,m,(didRefineThisStep && typeWasRefined))
+         if tp.Kind = TyparKind.Type && typeWasRefined = false then
+             // patricks: we inferred obj because we had nothing left to infer.
+             // Warn.
+             // TODO: actually get this error listed somewhere
+             warning(NumberedError((1000,"hello!"),m))
+         max,m
     max,m
 
 let ChooseTyparSolution g amap tp = 
