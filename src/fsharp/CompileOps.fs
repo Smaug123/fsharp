@@ -400,7 +400,7 @@ let warningOn err level specificWarnOn =
     | 1182 -> false // chkUnusedValue - off by default
     | 3218 -> false // ArgumentsInSigAndImplMismatch - off by default
     | 3180 -> false // abImplicitHeapAllocation - off by default
-    // @patricks - this is where I might add the new warning so it's off by default
+    | 10305 -> false // patricks - off by default. Have invented a number for the error
     | _ -> level >= GetWarningLevel err 
 
 let SplitRelatedDiagnostics(err:PhasedDiagnostic) = 
